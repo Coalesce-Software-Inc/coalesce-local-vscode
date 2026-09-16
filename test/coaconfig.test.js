@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 
 const cfg = require('../coaconfig');
-const { platformKindOf, authTypeOf, fieldsFor } = require('../platforms');
+const { platformKindOf, authTypeOf, fieldsFor, usesSignIn, OAUTH_REDIRECT_EXAMPLE } = require('../platforms');
 
 const SAMPLE = `# my coa config
 [default]
@@ -19,14 +19,14 @@ snowflakePassword=pw
 domain=https://demo.example.com
 environmentID=65
 
-[mark_demo]
+[my_sf_conn]
 snowflakeAccount=acct
 snowflakeAuthType=Basic
 snowflakePassword=pw
 domain=https://demo.example.com
 environmentID=65
 
-[dela-poc]
+[my_dbx_conn]
 platformKind=Databricks
 databricksAuthType=Token
 databricksHost=https://dbc.example.com
@@ -49,17 +49,17 @@ test('round-trips a CRLF file too, given the eol read() reports', () => {
   const crlf = SAMPLE.replace(/\n/g, '\r\n');
   assert.strictEqual(cfg.serialize(cfg.parse(crlf), '\r\n'), crlf);
   const sections = cfg.parse(crlf);
-  cfg.upsertSection(sections, 'mark_demo', { snowflakeAccount: 'changed' });
+  cfg.upsertSection(sections, 'my_sf_conn', { snowflakeAccount: 'changed' });
   const out = cfg.serialize(sections, '\r\n');
   assert.ok(!/[^\r]\n/.test(out), 'every line ending stayed CRLF');
 });
 
 test('keeps comments and unknown lines outside the sections it rewrites', () => {
   const sections = cfg.parse(SAMPLE);
-  cfg.upsertSection(sections, 'dela-poc', { platformKind: 'Databricks', databricksHost: 'https://new.example.com' });
+  cfg.upsertSection(sections, 'my_dbx_conn', { platformKind: 'Databricks', databricksHost: 'https://new.example.com' });
   const out = cfg.serialize(sections);
   assert.ok(out.startsWith('# my coa config\n'), 'preamble comment survives');
-  assert.ok(out.includes('[mark_demo]\nsnowflakeAccount=acct'), 'untouched section survives verbatim');
+  assert.ok(out.includes('[my_sf_conn]\nsnowflakeAccount=acct'), 'untouched section survives verbatim');
   assert.ok(out.includes('databricksHost=https://new.example.com'));
   assert.ok(!out.includes('databricksToken=dbtok'), 'keys absent from the new entries are gone');
 });
@@ -71,24 +71,66 @@ test('reads values containing = and : intact', () => {
   assert.strictEqual(entries.domain, 'https://x.example.com:8443');
 });
 
+// ------------------------------------------------------------------ quoting
+
+test('unquotes a value `coa` wrote as a JSON literal', () => {
+  const sections = cfg.parse('[oauth]\nsnowflakeOAuthClientID="AbC123+dEf456/ghI789="\n');
+  const entries = cfg.entriesOf(cfg.findSection(sections, 'oauth'));
+  assert.strictEqual(entries.snowflakeOAuthClientID, 'AbC123+dEf456/ghI789=');
+});
+
+test('quotes on write exactly when `ini` would, so `coa` reads back what was typed', () => {
+  // A base64 client secret ends in '=', which unquoted would be ambiguous.
+  assert.strictEqual(cfg.encodeValue('Zm9vYmFyL2Jheit0ZXN0+PQ='), '"Zm9vYmFyL2Jheit0ZXN0+PQ="');
+  assert.strictEqual(cfg.encodeValue('http://localhost:8080'), 'http://localhost:8080');
+  assert.strictEqual(cfg.encodeValue('COMPUTE_WH'), 'COMPUTE_WH');
+  assert.strictEqual(cfg.encodeValue(' padded '), '" padded "');
+  assert.strictEqual(cfg.encodeValue('a#b;c'), 'a\\#b\\;c', 'a comment character cannot be left bare');
+});
+
+test('every value survives a write/read round trip', () => {
+  for (const value of ['AbC123+dEf456/ghI789=', 'plain', 'a#b;c', ' padded ', '-----BEGIN KEY-----\nabc=\n', '"quoted"']) {
+    const sections = cfg.parse('');
+    cfg.upsertSection(sections, 'p', { k: value });
+    const back = cfg.entriesOf(cfg.findSection(cfg.parse(cfg.serialize(sections)), 'p'));
+    assert.strictEqual(back.k, value, `round trip of ${JSON.stringify(value)}`);
+  }
+});
+
+test('an OAuth profile edited in the form writes back unchanged', () => {
+  const original = [
+    '[my_sf_conn]',
+    'snowflakeAccount=xy12345',
+    'snowflakeAuthType=OAuth',
+    'snowflakeUsername=jdoe',
+    'snowflakeOAuthClientID="AbC123+dEf456/ghI789="',
+    'snowflakeOAuthRedirectUri=http://localhost:8080',
+    '',
+  ].join('\n');
+  const sections = cfg.parse(original);
+  const entries = cfg.entriesOf(cfg.findSection(sections, 'my_sf_conn'));
+  cfg.upsertSection(sections, 'my_sf_conn', cfg.applyFields(entries, entries));
+  assert.strictEqual(cfg.serialize(sections), original, 'no quote drift from opening and saving');
+});
+
 // ---------------------------------------------------------------- listing
 
 test('listProfiles reports platform and excludes default', () => {
   const list = cfg.listProfiles(cfg.parse(SAMPLE));
-  assert.deepStrictEqual(list.map((p) => p.name), ['mark_demo', 'dela-poc']);
+  assert.deepStrictEqual(list.map((p) => p.name), ['my_sf_conn', 'my_dbx_conn']);
   assert.deepStrictEqual(list.map((p) => p.platformKind), ['Snowflake', 'Databricks']);
   assert.deepStrictEqual(list.map((p) => p.active), [false, false], 'nothing is active without a workspace');
 });
 
 test('the active flag comes from the name workspace.yml selects, not from [default]', () => {
-  const list = cfg.listProfiles(cfg.parse(SAMPLE), 'dela-poc');
+  const list = cfg.listProfiles(cfg.parse(SAMPLE), 'my_dbx_conn');
   assert.deepStrictEqual(list.map((p) => p.active), [false, true]);
 });
 
 test('editing a named profile leaves [default] alone', () => {
   const sections = cfg.parse(SAMPLE);
-  cfg.upsertSection(sections, 'mark_demo', { snowflakeAccount: 'changed' });
-  cfg.deleteProfile(sections, 'dela-poc');
+  cfg.upsertSection(sections, 'my_sf_conn', { snowflakeAccount: 'changed' });
+  cfg.deleteProfile(sections, 'my_dbx_conn');
   assert.strictEqual(cfg.entriesOf(cfg.findSection(sections, 'default')).snowflakeAccount, 'acct');
 });
 
@@ -97,13 +139,13 @@ test('[default] is editable in its own right — the sidebar falls back to it', 
   const entries = cfg.entriesOf(cfg.findSection(sections, 'default'));
   cfg.upsertSection(sections, 'default', { ...entries, token: 'rotated' });
   assert.strictEqual(cfg.entriesOf(cfg.findSection(sections, 'default')).token, 'rotated');
-  assert.deepStrictEqual(cfg.listProfiles(sections).map((p) => p.name), ['mark_demo', 'dela-poc'], 'still not a profile');
+  assert.deepStrictEqual(cfg.listProfiles(sections).map((p) => p.name), ['my_sf_conn', 'my_dbx_conn'], 'still not a profile');
 });
 
 // --------------------------------------------------------------- form merge
 
 test('switching platform drops the previous platform keys but keeps cloud keys', () => {
-  const existing = cfg.entriesOf(cfg.findSection(cfg.parse(SAMPLE), 'mark_demo'));
+  const existing = cfg.entriesOf(cfg.findSection(cfg.parse(SAMPLE), 'my_sf_conn'));
   const merged = cfg.applyFields(existing, {
     platformKind: 'Databricks',
     databricksAuthType: 'Token',
@@ -147,6 +189,76 @@ test('falls back to the first auth type when the stored one is unknown', () => {
   assert.strictEqual(authTypeOf({ snowflakeAuthType: 'Nonsense' }, 'Snowflake'), 'Basic');
 });
 
+test('recognises a Snowflake OAuth profile and offers its client fields', () => {
+  assert.strictEqual(authTypeOf({ snowflakeAuthType: 'OAuth' }, 'Snowflake'), 'OAuth');
+  const keys = fieldsFor('Snowflake', 'OAuth').map((f) => f.key);
+  assert.ok(keys.includes('snowflakeOAuthClientID') && keys.includes('snowflakeOAuthClientSecret'));
+  assert.ok(keys.includes('snowflakeOAuthRedirectUri'));
+  assert.ok(
+    !fieldsFor('Snowflake', 'OAuth').some((f) => f.key === 'snowflakePassword' || f.key === 'snowflakeKeyPairKey'),
+    'OAuth stores no credential of its own',
+  );
+});
+
+test('the three OAuth client fields are optional and default to nothing', () => {
+  // They only apply to a custom security integration, so an untouched form must
+  // write none of them — empty means Snowflake's built-in OAuth.
+  const oauth = fieldsFor('Snowflake', 'OAuth');
+  for (const key of ['snowflakeOAuthClientID', 'snowflakeOAuthClientSecret', 'snowflakeOAuthRedirectUri']) {
+    const field = oauth.find((f) => f.key === key);
+    assert.ok(!field.required, `${key} is optional`);
+    assert.strictEqual(field.default, undefined, `${key} writes no value of its own`);
+  }
+  const redirect = oauth.find((f) => f.key === 'snowflakeOAuthRedirectUri');
+  assert.strictEqual(redirect.placeholder, OAUTH_REDIRECT_EXAMPLE, 'the loopback URL is only an example');
+  assert.strictEqual(
+    oauth.find((f) => f.key === 'snowflakeOAuthClientSecret').secret,
+    true,
+    'the client secret is masked like every other credential',
+  );
+});
+
+test('an OAuth profile with no client settings saves none of those keys', () => {
+  const merged = cfg.applyFields({}, {
+    platformKind: 'Snowflake',
+    snowflakeAuthType: 'OAuth',
+    snowflakeAccount: 'acct',
+    snowflakeUsername: 'me',
+  });
+  assert.deepStrictEqual(Object.keys(merged).sort(), [
+    'platformKind', 'snowflakeAccount', 'snowflakeAuthType', 'snowflakeUsername',
+  ]);
+});
+
+test('only OAuth asks for a browser sign-in', () => {
+  assert.strictEqual(usesSignIn('Snowflake', 'OAuth'), true);
+  assert.strictEqual(usesSignIn('Snowflake', 'KeyPair'), false);
+  assert.strictEqual(usesSignIn('Databricks', 'OAuthM2M'), false, 'M2M needs no browser');
+});
+
+test('switching Snowflake auth away from OAuth drops the client keys', () => {
+  const existing = {
+    snowflakeAccount: 'acct',
+    snowflakeAuthType: 'OAuth',
+    snowflakeOAuthClientID: 'cid',
+    snowflakeOAuthClientSecret: 'sec',
+    snowflakeOAuthRedirectUri: 'http://localhost:8080',
+    domain: 'https://demo.example.com',
+  };
+  const merged = cfg.applyFields(existing, {
+    platformKind: 'Snowflake',
+    snowflakeAuthType: 'Basic',
+    snowflakeAccount: 'acct',
+    snowflakeUsername: 'me',
+    snowflakePassword: 'pw',
+    domain: 'https://demo.example.com',
+  });
+  for (const key of ['snowflakeOAuthClientID', 'snowflakeOAuthClientSecret', 'snowflakeOAuthRedirectUri']) {
+    assert.ok(!(key in merged), `${key} dropped`);
+  }
+  assert.strictEqual(merged.domain, 'https://demo.example.com', 'cloud keys survive');
+});
+
 // --------------------------------------------------------------------- i/o
 
 test('writes atomically at mode 0600 and backs up the previous file', () => {
@@ -155,7 +267,7 @@ test('writes atomically at mode 0600 and backs up the previous file', () => {
   fs.writeFileSync(file, SAMPLE, { mode: 0o600 });
 
   const { sections, eol } = cfg.read(file);
-  cfg.upsertSection(sections, 'dela-poc', { platformKind: 'Databricks', databricksToken: 'rotated' });
+  cfg.upsertSection(sections, 'my_dbx_conn', { platformKind: 'Databricks', databricksToken: 'rotated' });
   const backupPath = cfg.backup(file);
   cfg.write(file, sections, eol);
 
@@ -165,7 +277,7 @@ test('writes atomically at mode 0600 and backs up the previous file', () => {
     assert.strictEqual(fs.statSync(backupPath).mode & 0o777, 0o600, 'backup is owner-only too');
   }
   assert.strictEqual(fs.readFileSync(backupPath, 'utf8'), SAMPLE, 'backup holds the pre-write content');
-  assert.strictEqual(cfg.entriesOf(cfg.findSection(cfg.read(file).sections, 'dela-poc')).databricksToken, 'rotated');
+  assert.strictEqual(cfg.entriesOf(cfg.findSection(cfg.read(file).sections, 'my_dbx_conn')).databricksToken, 'rotated');
   assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.tmp.')), 'no temp file left behind');
 
   fs.rmSync(dir, { recursive: true, force: true });

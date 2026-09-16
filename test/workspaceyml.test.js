@@ -11,7 +11,7 @@ const path = require('path');
 const ws = require('../workspaceyml');
 
 const SAMPLE = `# local mappings — not committed
-profile: mark_demo
+profile: my_sf_conn
 locations:
   TARGET:
     database: DEV_DB
@@ -30,7 +30,7 @@ const tmpdir = (files = {}) => {
 // ------------------------------------------------------------------ reading
 
 test('reads the top-level profile key', () => {
-  assert.strictEqual(ws.profileOf(SAMPLE), 'mark_demo');
+  assert.strictEqual(ws.profileOf(SAMPLE), 'my_sf_conn');
 });
 
 test('reports null when there is no profile key', () => {
@@ -50,27 +50,27 @@ test('ignores a profile: line inside a block scalar', () => {
 });
 
 test('strips quotes and trailing comments from the value', () => {
-  assert.strictEqual(ws.profileOf('profile: "mark_demo"\n'), 'mark_demo');
-  assert.strictEqual(ws.profileOf("profile: 'mark_demo'\n"), 'mark_demo');
-  assert.strictEqual(ws.profileOf('profile: mark_demo # the demo tenant\n'), 'mark_demo');
+  assert.strictEqual(ws.profileOf('profile: "my_sf_conn"\n'), 'my_sf_conn');
+  assert.strictEqual(ws.profileOf("profile: 'my_sf_conn'\n"), 'my_sf_conn');
+  assert.strictEqual(ws.profileOf('profile: my_sf_conn # the demo tenant\n'), 'my_sf_conn');
 });
 
 // ------------------------------------------------------------------ writing
 
 test('replaces an existing profile key in place, leaving everything else byte for byte', () => {
-  const out = ws.setProfile(SAMPLE, 'dela-poc');
-  assert.strictEqual(out, SAMPLE.replace('profile: mark_demo', 'profile: dela-poc'));
+  const out = ws.setProfile(SAMPLE, 'my_dbx_conn');
+  assert.strictEqual(out, SAMPLE.replace('profile: my_sf_conn', 'profile: my_dbx_conn'));
 });
 
 test('inserts a new key below the leading comment block', () => {
   const text = '# local mappings\n# not committed\nlocations:\n  TARGET:\n    database: D\n    schema: S\n';
-  const out = ws.setProfile(text, 'mark_demo');
-  assert.strictEqual(out, text.replace('locations:', 'profile: mark_demo\nlocations:'));
+  const out = ws.setProfile(text, 'my_sf_conn');
+  assert.strictEqual(out, text.replace('locations:', 'profile: my_sf_conn\nlocations:'));
 });
 
 test('clearing removes the line and nothing else', () => {
   const out = ws.setProfile(SAMPLE, null);
-  assert.strictEqual(out, SAMPLE.replace('profile: mark_demo\n', ''));
+  assert.strictEqual(out, SAMPLE.replace('profile: my_sf_conn\n', ''));
   assert.strictEqual(ws.profileOf(out), null);
 });
 
@@ -91,9 +91,9 @@ test('keeps a file that ends without a newline from growing one silently', () =>
 
 test('keeps CRLF line endings, so a Windows checkout is not a whole-file diff', () => {
   const crlf = SAMPLE.replace(/\n/g, '\r\n');
-  assert.strictEqual(ws.profileOf(crlf), 'mark_demo', 'reading is oblivious to the line ending');
-  assert.strictEqual(ws.setProfile(crlf, 'dela-poc'), crlf.replace('profile: mark_demo', 'profile: dela-poc'));
-  assert.strictEqual(ws.setProfile(crlf, null), crlf.replace('profile: mark_demo\r\n', ''));
+  assert.strictEqual(ws.profileOf(crlf), 'my_sf_conn', 'reading is oblivious to the line ending');
+  assert.strictEqual(ws.setProfile(crlf, 'my_dbx_conn'), crlf.replace('profile: my_sf_conn', 'profile: my_dbx_conn'));
+  assert.strictEqual(ws.setProfile(crlf, null), crlf.replace('profile: my_sf_conn\r\n', ''));
   assert.strictEqual(
     ws.setProfile('locations: {}\r\n', 'x'),
     'profile: x\r\nlocations: {}\r\n',
@@ -117,15 +117,15 @@ test('writeProfile edits in place and preserves the file mode', () => {
   const file = path.join(dir, ws.FILENAME);
   fs.writeFileSync(file, SAMPLE, { mode: 0o640 });
 
-  assert.strictEqual(ws.writeProfile(dir, 'dela-poc'), true);
-  assert.strictEqual(ws.readProfile(dir), 'dela-poc');
+  assert.strictEqual(ws.writeProfile(dir, 'my_dbx_conn'), true);
+  assert.strictEqual(ws.readProfile(dir), 'my_dbx_conn');
   // Windows has no POSIX mode to preserve — chmod there only toggles read-only.
   if (process.platform !== 'win32') {
     assert.strictEqual(fs.statSync(file).mode & 0o777, 0o640, 'mode survives the rename');
   }
   assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.tmp.')), 'no temp file left behind');
 
-  assert.strictEqual(ws.writeProfile(dir, 'dela-poc'), false, 'an unchanged write does not touch the file');
+  assert.strictEqual(ws.writeProfile(dir, 'my_dbx_conn'), false, 'an unchanged write does not touch the file');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

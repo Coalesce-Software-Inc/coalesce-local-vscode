@@ -12,13 +12,26 @@ const { CLOUD_FIELDS, PLATFORMS, PLATFORM_NAMES, SECRET_KEYS, platformKindOf, au
  * `profile:` key: ticked on the profile that key names, and clearing it on that
  * profile unsets the key. It is disabled when the repo has no workspace.yml.
  *
+ * Auth types that sign in through a browser (Snowflake OAuth) get a sign-in
+ * block instead of a stored credential. Its button saves the profile first,
+ * because `coa auth warehouse login` reads the client settings back off disk.
+ *
  * @param {vscode.ExtensionContext} context
  * @param {{ name?: string, entries?: Record<string,string>, existingNames: string[],
- *           active?: boolean, workspaceReady?: boolean, workspaceFile?: string|null }} options
- * @param {(result: {name: string, platformKind: string, authType: string, fields: Record<string,string>, active: boolean}) => Promise<string|void>} onSave
- *        Return a string to report a validation error back into the form.
+ *           active?: boolean, workspaceReady?: boolean, workspaceFile?: string|null,
+ *           signedIn?: boolean, tokenCachePath?: string|null }} options
+ * @param {{ onSave: (result: FormResult) => Promise<string|void>,
+ *           onLogin?: (result: FormResult, ui: FormUi) => Promise<string|void>,
+ *           onLogout?: (ui: FormUi) => Promise<string|void> }} handlers
+ *        Each returns a string to report an error back into the form.
+ *
+ * @typedef {{name: string, platformKind: string, authType: string,
+ *            fields: Record<string,string>, active: boolean}} FormResult
+ * @typedef {{ auth: (state: {signedIn: boolean, busy?: boolean, note?: string}) => void,
+ *             saved: (name: string) => void }} FormUi
  */
-function showProfileForm(context, options, onSave) {
+function showProfileForm(context, options, handlers) {
+  const { onSave, onLogin, onLogout } = handlers;
   const isNew = !options.name;
   const entries = options.entries || {};
   const platformKind = platformKindOf(entries);
@@ -55,22 +68,46 @@ function showProfileForm(context, options, onSave) {
     platforms: PLATFORMS,
     platformNames: PLATFORM_NAMES,
     cloudFields: CLOUD_FIELDS,
+    signedIn: !!options.signedIn,
+    tokenCachePath: options.tokenCachePath || null,
   };
 
   panel.webview.html = html(panel.webview, model);
+
+  /** @type {import('./profileForm').FormUi} */
+  const ui = {
+    auth: (state) => panel.webview.postMessage({ type: 'authState', ...state }),
+    saved: (name) => panel.webview.postMessage({ type: 'saved', name }),
+  };
+  const fail = (message) => panel.webview.postMessage({ type: 'error', message });
 
   panel.webview.onDidReceiveMessage(async (message) => {
     if (message.type === 'cancel') {
       panel.dispose();
       return;
     }
+
+    // Sign-in keeps the form open: the button it came from has to end up
+    // showing the new state.
+    if (message.type === 'login' || message.type === 'logout') {
+      const handler = message.type === 'login' ? onLogin : onLogout;
+      if (!handler) return;
+      try {
+        const error = await (message.type === 'login' ? handler(message.payload, ui) : handler(ui));
+        if (error) fail(error);
+      } catch (err) {
+        fail(err.message);
+      }
+      return;
+    }
+
     if (message.type !== 'save') return;
     try {
       const error = await onSave(message.payload);
-      if (error) panel.webview.postMessage({ type: 'error', message: error });
+      if (error) fail(error);
       else panel.dispose();
     } catch (err) {
-      panel.webview.postMessage({ type: 'error', message: err.message });
+      fail(err.message);
     }
   });
 
@@ -123,6 +160,18 @@ function html(webview, model) {
     background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);
     border: none; border-radius: 2px; font-size: 0.9em;
   }
+  .signin-row { display: flex; gap: 10px; align-items: center; margin: 4px 0 0; }
+  .signin-row .status { flex: 1; display: flex; gap: 6px; align-items: center; }
+  .signin-row button {
+    flex: 0 0 auto; padding: 5px 14px; border: none; border-radius: 2px; cursor: pointer;
+    font-family: inherit; font-size: inherit;
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+  }
+  .signin-row button[disabled] { opacity: 0.5; cursor: default; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+         background: var(--vscode-descriptionForeground); }
+  .dot.on { background: var(--vscode-testing-iconPassed, var(--vscode-charts-green, #3fb950)); }
+  .dot.busy { background: var(--vscode-charts-yellow, #d2a106); }
   .actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 20px; }
   .actions .spacer { flex: 1; }
   button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
@@ -146,7 +195,7 @@ function html(webview, model) {
     <legend>Profile</legend>
     <div class="field">
       <label for="name">Profile name <span class="req">*</span></label>
-      <input id="name" type="text" placeholder="dela-poc" />
+      <input id="name" type="text" placeholder="my_dbx_conn" />
       <div class="help">The <code>[section]</code> name in ~/.coa/config.</div>
     </div>
     <div class="field">
@@ -162,6 +211,15 @@ function html(webview, model) {
   <fieldset>
     <legend id="platform-legend">Connection</legend>
     <div id="platform-fields"></div>
+  </fieldset>
+
+  <fieldset id="signin-set">
+    <legend>Warehouse sign-in</legend>
+    <div class="signin-row">
+      <span class="status"><span class="dot" id="signin-dot"></span><span id="signin-status"></span></span>
+      <button id="signin-button" type="button"></button>
+    </div>
+    <div class="help" id="signin-help"></div>
   </fieldset>
 
   <fieldset>
@@ -215,6 +273,8 @@ function renderAuth() {
   el('auth-field').style.display = auths.length > 1 ? '' : 'none';
 }
 
+const activeFields = () => model.platforms[state.platform].auths[state.auth].fields.concat(model.cloudFields);
+
 function fieldHtml(f) {
   const id = 'f_' + f.key;
   const label = '<label for="' + id + '">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</label>';
@@ -254,7 +314,51 @@ function renderFields() {
       button.textContent = hidden ? 'Hide' : 'Show';
     });
   }
+  renderSignIn();
 }
+
+// --------------------------------------------------------------- sign-in block
+
+const signin = { signedIn: model.signedIn, busy: false, note: '' };
+
+function renderSignIn() {
+  const shown = !!model.platforms[state.platform].auths[state.auth].signIn;
+  el('signin-set').style.display = shown ? '' : 'none';
+  if (!shown) return;
+
+  el('signin-dot').className = 'dot' + (signin.busy ? ' busy' : signin.signedIn ? ' on' : '');
+  el('signin-status').textContent =
+    signin.note || (signin.busy ? 'Working…' : signin.signedIn ? 'Signed in' : 'Not signed in');
+
+  const button = el('signin-button');
+  button.textContent = signin.signedIn ? 'Sign out' : 'Sign in…';
+  button.disabled = signin.busy;
+
+  // One token cache serves every profile, so neither state is profile-specific.
+  el('signin-help').textContent = signin.signedIn
+    ? 'Clears the cached Snowflake tokens' + (model.tokenCachePath ? ' in ' + model.tokenCachePath : '')
+      + '. Every profile shares that cache, so this signs all of them out.'
+    : 'Saves the profile, then opens a browser to sign in to Snowflake. The cached tokens are shared by every profile.';
+}
+
+el('signin-button').addEventListener('click', () => {
+  if (signin.busy) return;
+  if (signin.signedIn) {
+    signin.busy = true;
+    signin.note = 'Signing out…';
+    renderSignIn();
+    vscode.postMessage({ type: 'logout' });
+    return;
+  }
+  // Signing in reads the client settings back off disk, so the form has to be
+  // saved before it runs — not after.
+  const payload = collect();
+  if (!payload) return;
+  signin.busy = true;
+  signin.note = 'Saving, then opening your browser…';
+  renderSignIn();
+  vscode.postMessage({ type: 'login', payload });
+});
 
 el('platform').addEventListener('change', () => {
   state.platform = el('platform').value;
@@ -274,14 +378,18 @@ function showError(message) {
 
 el('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
 
-el('save').addEventListener('click', () => {
+/** Validate and gather the form. @returns the payload, or null after reporting why not. */
+function collect() {
   showError('');
   const name = el('name').value.trim();
-  if (!name) return showError('Give the profile a name.');
+  if (!name) {
+    showError('Give the profile a name.');
+    return null;
+  }
 
   const fields = {};
   let missing = null;
-  for (const f of model.platforms[state.platform].auths[state.auth].fields.concat(model.cloudFields)) {
+  for (const f of activeFields()) {
     const raw = f.secret ? (state.secrets[f.key] || '') : (state.values[f.key] || '');
     const value = raw.trim();
     if (f.required && !value && !(f.secret && model.secretsPresent[f.key])) {
@@ -292,19 +400,51 @@ el('save').addEventListener('click', () => {
     }
     if (value) fields[f.key] = value;
   }
-  if (missing) return showError('"' + missing.label + '" is required.');
+  if (missing) {
+    showError('"' + missing.label + '" is required.');
+    return null;
+  }
 
   fields.platformKind = state.platform;
   fields[model.platforms[state.platform].authKey] = state.auth;
+  return { name, platformKind: state.platform, authType: state.auth, fields, active: el('activate').checked };
+}
 
-  vscode.postMessage({
-    type: 'save',
-    payload: { name, platformKind: state.platform, authType: state.auth, fields, active: el('activate').checked },
-  });
+el('save').addEventListener('click', () => {
+  const payload = collect();
+  if (payload) vscode.postMessage({ type: 'save', payload });
 });
 
 window.addEventListener('message', (event) => {
-  if (event.data.type === 'error') showError(event.data.message);
+  const message = event.data;
+  if (message.type === 'error') {
+    signin.busy = false;
+    signin.note = '';
+    renderSignIn();
+    showError(message.message);
+    return;
+  }
+  if (message.type === 'authState') {
+    signin.busy = !!message.busy;
+    signin.signedIn = !!message.signedIn;
+    signin.note = message.note || '';
+    renderSignIn();
+    return;
+  }
+  // Signing in saved the profile on our behalf; the form is now editing it.
+  if (message.type === 'saved') {
+    model.isNew = false;
+    model.name = message.name;
+    el('name').value = message.name;
+    el('name').readOnly = true;
+    el('title').textContent = 'Edit profile: ' + message.name;
+    el('subtitle').textContent = 'Blank password fields keep the value already in ~/.coa/config.';
+    for (const key of Object.keys(state.secrets)) {
+      if (state.secrets[key]) model.secretsPresent[key] = true;
+    }
+    state.secrets = {};
+    renderFields();
+  }
 });
 
 renderAuth();

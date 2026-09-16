@@ -60,6 +60,35 @@ function serialize(sections, eol = '\n') {
 
 const isBlankOrComment = (line) => /^\s*([;#].*)?$/.test(line);
 
+/**
+ * `coa` reads this file with the `ini` package, so values follow its two rules:
+ * a fully quoted value is a JSON string literal — that is how a value holding
+ * `=` or a newline survives the round trip, and why `coa` writes base64 OAuth
+ * client IDs quoted — and outside quotes `;` and `#` are backslash-escaped so
+ * they cannot start a comment.
+ */
+function decodeValue(raw) {
+  if (raw.length > 1 && raw.startsWith('"') && raw.endsWith('"')) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      /* not a valid literal — take it as typed */
+    }
+  }
+  return raw.replace(/\\([;#])/g, '$1');
+}
+
+/** The inverse of decodeValue, quoting on the same conditions `ini` does. */
+function encodeValue(value) {
+  const text = String(value);
+  const mustQuote =
+    /[=\r\n]/.test(text) ||
+    text.startsWith('[') ||
+    text !== text.trim() ||
+    (text.length > 1 && text.startsWith('"') && text.endsWith('"'));
+  return mustQuote ? JSON.stringify(text) : text.replace(/[;#]/g, '\\$&');
+}
+
 /** @returns {Record<string,string>} */
 function entriesOf(section) {
   const entries = {};
@@ -67,7 +96,7 @@ function entriesOf(section) {
     if (isBlankOrComment(line)) continue;
     const eq = line.indexOf('=');
     if (eq === -1) continue;
-    entries[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    entries[line.slice(0, eq).trim()] = decodeValue(line.slice(eq + 1).trim());
   }
   return entries;
 }
@@ -79,7 +108,7 @@ function setEntries(section, entries) {
     if (isBlankOrComment(line) && line.trim() !== '') lead.push(line);
     else break;
   }
-  section.lines = [...lead, ...Object.entries(entries).map(([k, v]) => `${k}=${v}`), ''];
+  section.lines = [...lead, ...Object.entries(entries).map(([k, v]) => `${k}=${encodeValue(v)}`), ''];
 }
 
 function findSection(sections, name) {
@@ -184,6 +213,8 @@ module.exports = {
   defaultConfigPath,
   parse,
   serialize,
+  decodeValue,
+  encodeValue,
   entriesOf,
   setEntries,
   findSection,

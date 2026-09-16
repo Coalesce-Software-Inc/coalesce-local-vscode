@@ -25,8 +25,18 @@ const CLOUD_FIELDS = [
   },
 ];
 
+/**
+ * A plausible redirect URI, shown only as the placeholder of an empty box.
+ *
+ * Left blank — the normal case — `coa` falls back to a loopback port of its own
+ * choosing, so writing a value here would narrow what already works. It matters
+ * only for a custom security integration, where it has to match the URI
+ * registered in Snowflake exactly.
+ */
+const OAUTH_REDIRECT_EXAMPLE = 'http://localhost:8080';
+
 const SNOWFLAKE_COMMON = [
-  { key: 'snowflakeAccount', label: 'Account identifier', required: true, placeholder: 'fka56740' },
+  { key: 'snowflakeAccount', label: 'Account identifier', required: true, placeholder: 'xy12345' },
   { key: 'snowflakeUsername', label: 'Username', required: true },
   { key: 'snowflakeWarehouse', label: 'Warehouse', placeholder: 'COMPUTE_WH' },
   { key: 'snowflakeRole', label: 'Role', placeholder: 'SYSADMIN' },
@@ -60,6 +70,30 @@ const PLATFORMS = {
             help: 'Path to a .p8 file, or the PEM body itself.',
           },
           { key: 'snowflakeKeyPairPass', label: 'Key passphrase', secret: true },
+        ],
+      },
+      OAuth: {
+        label: 'OAuth (browser sign-in)',
+        // No stored credential: `coa auth warehouse login` caches the tokens.
+        signIn: true,
+        fields: [
+          ...SNOWFLAKE_COMMON,
+          // All three are optional and belong together: fill them in only for a
+          // custom security integration. Empty means Snowflake's built-in OAuth,
+          // which is what most setups want — hence placeholders, not defaults.
+          {
+            key: 'snowflakeOAuthClientID',
+            label: 'Client ID',
+            placeholder: 'optional',
+            help: "For a custom security integration. Leave all three empty to use Snowflake's built-in OAuth.",
+          },
+          { key: 'snowflakeOAuthClientSecret', label: 'Client secret', secret: true, placeholder: 'optional' },
+          {
+            key: 'snowflakeOAuthRedirectUri',
+            label: 'Redirect URI',
+            placeholder: OAUTH_REDIRECT_EXAMPLE,
+            help: 'Must match the URI registered on that integration. Empty lets `coa` pick a loopback port.',
+          },
         ],
       },
     },
@@ -149,6 +183,11 @@ function platformKindOf(entries = {}) {
   return 'Snowflake';
 }
 
+/** Whether this auth type signs in through a browser instead of storing a credential. */
+function usesSignIn(platformKind, authType) {
+  return !!PLATFORMS[platformKind]?.auths?.[authType]?.signIn;
+}
+
 function authTypeOf(entries = {}, platformKind = platformKindOf(entries)) {
   const platform = PLATFORMS[platformKind];
   if (!platform) return undefined;
@@ -162,8 +201,10 @@ module.exports = {
   PLATFORM_NAMES,
   ALL_PLATFORM_KEYS,
   SECRET_KEYS,
+  OAUTH_REDIRECT_EXAMPLE,
   authTypesFor,
   fieldsFor,
+  usesSignIn,
   platformKindOf,
   authTypeOf,
 };

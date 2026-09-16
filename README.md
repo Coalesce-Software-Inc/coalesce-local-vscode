@@ -36,14 +36,14 @@ The selected profile is recorded **in the repo's `workspace.yml`**, as a
 top-level key:
 
 ```yaml
-profile: mark_demo
+profile: my_sf_conn
 locations:
   TARGET:
     database: DEV_DB
     schema: MARK
 ```
 
-`coa` resolves it from there (`coa doctor` reports `profile: mark_demo
+`coa` resolves it from there (`coa doctor` reports `profile: my_sf_conn
 (workspace.yml)`), so switching profile is a one-line edit to that file and
 different repos can use different profiles at the same time. Nothing is ever
 copied into `[default]` — that section is coa's own fallback, not a mirror of
@@ -53,13 +53,13 @@ The sidebar shows:
 
 ```
 LOCAL UI
-  ▶ Open Coalesce UI                          mark_demo
-COALESCE CLOUD                                mark_demo
-  Coalesce domain    https://mark-sandbox…        ✎
+  ▶ Open Coalesce UI                          my_sf_conn
+COALESCE CLOUD                                my_sf_conn
+  Coalesce domain    https://sandbox…        ✎
   Coalesce API key   ••••••••                     ✎
   Environment ID     12                           ✎
 PROFILES
-  ● mark_demo        Snowflake · active        ✎ 🗑
+  ● my_sf_conn        Snowflake · active        ✎ 🗑
   ○ analytics_dev    Databricks                ✎ 🗑
   + New profile…
 ```
@@ -98,9 +98,33 @@ Safety rules the code follows:
   value. To *clear* one, edit `~/.coa/config` directly.
 - Changing a profile's platform drops the previous platform's keys, so a
   Snowflake→Databricks switch leaves no stranded `snowflake*` entries.
+- Values are quoted on write exactly where `ini` (the parser `coa` itself uses)
+  would quote them, so a base64 OAuth client secret — anything containing `=` —
+  survives the round trip instead of being cut short.
 
-Platform fields come from `coa describe config` (CLI 7.41): Snowflake
-(Basic / KeyPair), Databricks (Token / OAuth M2M), BigQuery (service account).
+Platform fields come from `coa describe config` (CLI 7.44): Snowflake
+(Basic / KeyPair / OAuth), Databricks (Token / OAuth M2M), BigQuery (service
+account).
+
+### Snowflake OAuth
+
+`snowflakeAuthType=OAuth` stores no credential of its own — you sign in through
+a browser and `coa` caches the tokens. The form reflects that:
+
+- **client ID**, **client secret** and **redirect URI** boxes — all three
+  optional, and all three together. Empty means Snowflake's built-in OAuth,
+  which is what most setups want; fill them in only for a custom security
+  integration, where the redirect URI has to match the one registered there.
+  The redirect box shows `http://localhost:8080` as a greyed-out example
+  rather than a value, because left blank `coa` picks a loopback port itself.
+- a **Sign in / Sign out** button running `coa auth warehouse login|logout`.
+
+Sign-in saves the profile first, because `coa` reads those client settings back
+off disk. The button's state comes from the cached tokens in
+`~/.coa/snowflake-oauth-tokens.json`; since the driver keys that one cache by
+account and user rather than by profile, it reports "signed in to a warehouse"
+rather than "signed in to *this* profile", and signing out clears it for every
+profile.
 
 Because `coa serve` resolves the profile once at startup, switching profiles
 while the server runs offers to restart it.

@@ -1,7 +1,9 @@
 const vscode = require('vscode');
+const os = require('os');
 const coaconfig = require('./coaconfig');
 const workspaceyml = require('./workspaceyml');
-const { detectCoa } = require('./serve');
+const warehouse = require('./warehouseAuth');
+const { detectCoa, killTree } = require('./serve');
 const { CLOUD_FIELDS, SECRET_KEYS, fieldsFor } = require('./platforms');
 const { showProfileForm } = require('./profileForm');
 
@@ -160,6 +162,61 @@ function openProfileForm(context, node, deps) {
   const dir = deps.folder();
   const workspaceReady = workspaceyml.exists(dir);
   const selected = workspaceReady ? workspaceyml.readProfile(dir) : null;
+  const configPath = coaconfig.defaultConfigPath();
+
+  // The section the form currently owns. Signing in writes the profile first,
+  // so a form that opened as "new" can be editing a real section by the time
+  // Save is pressed — and the name check has to know that.
+  let savedName = name;
+
+  /**
+   * Write the form to ~/.coa/config (and workspace.yml).
+   * @returns {{error: string} | {note: string, name: string}}
+   */
+  const persist = (payload) => {
+    const fresh = coaconfig.read().sections;
+    const error = validateName(payload.name, fresh, savedName);
+    if (error) return { error };
+
+    const target = (payload.name || '').trim();
+    const existing = coaconfig.findSection(fresh, target)
+      ? coaconfig.entriesOf(coaconfig.findSection(fresh, target))
+      : {};
+
+    // A blank secret input means "keep what is on disk", not "clear it".
+    for (const field of fieldsFor(payload.platformKind, payload.authType).concat(CLOUD_FIELDS)) {
+      if (field.secret && !(field.key in payload.fields) && existing[field.key]) {
+        payload.fields[field.key] = existing[field.key];
+      }
+    }
+
+    commit((s) => {
+      const current = coaconfig.findSection(s, target) ? coaconfig.entriesOf(coaconfig.findSection(s, target)) : {};
+      coaconfig.upsertSection(s, target, coaconfig.applyFields(current, payload.fields));
+    });
+    savedName = target;
+
+    let note = `Saved profile '${target}'.`;
+    if (workspaceReady) {
+      const current = workspaceyml.readProfile(dir);
+      let failure = null;
+      if (payload.active && current !== target) {
+        failure = setWorkspaceProfile(dir, target);
+        note = `Saved '${target}' and made it this workspace's profile.`;
+      } else if (!payload.active && current === target) {
+        failure = setWorkspaceProfile(dir, null);
+        note = `Saved '${target}' and cleared this workspace's profile.`;
+      }
+      // The section is already written, so report the rest and keep the form open.
+      if (failure) {
+        deps.refresh();
+        return { error: failure };
+      }
+    }
+
+    deps.refresh();
+    return { note, name: target };
+  };
 
   showProfileForm(
     context,
@@ -172,51 +229,94 @@ function openProfileForm(context, node, deps) {
       active: !!name && selected === name,
       workspaceReady,
       workspaceFile: dir ? workspaceyml.workspacePath(dir) : null,
+      signedIn: warehouse.hasCachedLogin(configPath),
+      tokenCachePath: warehouse.tokenCachePath(configPath),
     },
-    async (payload) => {
-      const fresh = coaconfig.read().sections;
-      const error = validateName(payload.name, fresh, name);
-      if (error) return error;
+    {
+      onSave: async (payload) => {
+        const result = persist(payload);
+        if (result.error) return result.error;
+        vscode.window.showInformationMessage(result.note);
+      },
 
-      const target = (payload.name || '').trim();
-      const existing = coaconfig.findSection(fresh, target)
-        ? coaconfig.entriesOf(coaconfig.findSection(fresh, target))
-        : {};
+      // Sign-in reads the client settings back off disk, so save before running it.
+      onLogin: async (payload, ui) => {
+        const result = persist(payload);
+        if (result.error) return result.error;
+        ui.saved(result.name);
 
-      // A blank secret input means "keep what is on disk", not "clear it".
-      for (const field of fieldsFor(payload.platformKind, payload.authType).concat(CLOUD_FIELDS)) {
-        if (field.secret && !(field.key in payload.fields) && existing[field.key]) {
-          payload.fields[field.key] = existing[field.key];
-        }
-      }
+        const failure = await runWarehouseLogin(result.name, dir);
+        ui.auth({ signedIn: warehouse.hasCachedLogin(configPath) });
+        if (failure) return failure;
+      },
 
-      commit((s) => {
-        const current = coaconfig.findSection(s, target) ? coaconfig.entriesOf(coaconfig.findSection(s, target)) : {};
-        coaconfig.upsertSection(s, target, coaconfig.applyFields(current, payload.fields));
-      });
-
-      let note = `Saved profile '${target}'.`;
-      if (workspaceReady) {
-        const current = workspaceyml.readProfile(dir);
-        let failure = null;
-        if (payload.active && current !== target) {
-          failure = setWorkspaceProfile(dir, target);
-          note = `Saved '${target}' and made it this workspace's profile.`;
-        } else if (!payload.active && current === target) {
-          failure = setWorkspaceProfile(dir, null);
-          note = `Saved '${target}' and cleared this workspace's profile.`;
-        }
-        // The section is already written, so report the rest and keep the form open.
-        if (failure) {
-          deps.refresh();
-          return failure;
-        }
-      }
-
-      deps.refresh();
-      vscode.window.showInformationMessage(note);
+      onLogout: async (ui) => {
+        const failure = await runWarehouseLogout(dir);
+        ui.auth({ signedIn: warehouse.hasCachedLogin(configPath) });
+        if (failure) return failure;
+      },
     },
   );
+}
+
+// ------------------------------------------------------------ warehouse sign-in
+
+function coaFor() {
+  return detectCoa(vscode.workspace.getConfiguration('coalesceServe').get('coaPath'));
+}
+
+/**
+ * `coa auth warehouse login` opens a browser and blocks until it comes back, so
+ * it runs behind a cancellable progress notification rather than silently.
+ *
+ * @returns {Promise<string|null>} an error to report in the form, or null.
+ */
+async function runWarehouseLogin(profile, dir) {
+  const ready = workspaceyml.exists(dir);
+  const { proc, done } = warehouse.runAuth({
+    coa: coaFor(),
+    args: warehouse.loginArgs(profile, ready ? dir : null),
+    cwd: ready ? dir : os.homedir(),
+  });
+
+  let cancelled = false;
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Signing in to Snowflake as '${profile}' — finish in your browser…`,
+        cancellable: true,
+      },
+      async (_progress, token) => {
+        token.onCancellationRequested(() => {
+          cancelled = true;
+          killTree(proc);
+        });
+        return done;
+      },
+    );
+  } catch (err) {
+    return cancelled ? null : `Sign-in failed: ${err.message.replace(/\.$/, '')}.`;
+  }
+  vscode.window.showInformationMessage(`Signed in to the warehouse for '${profile}'.`);
+  return null;
+}
+
+/** @returns {Promise<string|null>} an error to report in the form, or null. */
+async function runWarehouseLogout(dir) {
+  const { done } = warehouse.runAuth({
+    coa: coaFor(),
+    args: warehouse.logoutArgs(),
+    cwd: workspaceyml.exists(dir) ? dir : os.homedir(),
+    timeoutMs: warehouse.LOGOUT_TIMEOUT_MS,
+  });
+  try {
+    await done;
+  } catch (err) {
+    return `Sign-out failed: ${err.message.replace(/\.$/, '')}.`;
+  }
+  vscode.window.showInformationMessage('Cleared the cached Snowflake sign-in.');
+  return null;
 }
 
 async function editCloudField(node, deps) {
