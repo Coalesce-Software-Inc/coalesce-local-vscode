@@ -10,7 +10,7 @@
  */
 const assert = require('assert');
 const http = require('http');
-const { detectCoa, findFreePort, isPortFree, startServe, killTree } = require('../serve');
+const { resolveCoa, describeCoa, findFreePort, isPortFree, startServe, killTree } = require('../serve');
 
 const dir = process.argv[2] || process.cwd();
 
@@ -27,9 +27,9 @@ function get(url) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main() {
-  const coa = detectCoa();
+  const coa = resolveCoa({ source: process.env.COA_SOURCE || 'auto' });
   const port = await findFreePort(18082);
-  console.log(`coa      : ${coa}`);
+  console.log(`coa      : ${describeCoa(coa)}`);
   console.log(`workspace: ${dir}`);
   console.log(`port     : ${port}\n`);
 

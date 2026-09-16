@@ -140,6 +140,44 @@ COA_SERVE_READY {"url":"http://localhost:8082#nonce=…","port":8082,"nonce":"�
 The extension reads that line — the URL carries the auth nonce in its fragment —
 and loads the URL into a webview itself.
 
+## Which `coa` gets run
+
+Coalesce Desktop carries its own `coa`, so the extension can work for someone
+who has the app but cannot install the CLI separately. `coalesceServe.coaSource`
+picks between them:
+
+| Value | Resolution order |
+| --- | --- |
+| `auto` (default) | the shim Desktop publishes **while it is running**, else `coa` from `PATH`, else the CLI inside an installed Desktop |
+| `desktop` | Desktop's CLI, running or not — no separate CLI install needed |
+| `path` | `coa` from `PATH`, and nothing else |
+
+`coalesceServe.coaPath` overrides all of it.
+
+`auto` reaches for the app only when there is no CLI at all, so installing
+Desktop never displaces a `coa` you installed on purpose. It still prefers the
+running-Desktop shim over `PATH`, because while the app is up its CLI build is
+the one matching the UI being served.
+
+Desktop only publishes `~/.coalesce/desktop/agent.json` and its `coa` shim
+**while it is running** — it deletes both on quit. So `desktop` does not use the
+shim; it goes to the installed app and runs the CLI the way the app's own shim
+does:
+
+| | macOS | Windows |
+| --- | --- | --- |
+| App | `/Applications/Coalesce.app`, `~/Applications/Coalesce.app` | `%LOCALAPPDATA%\Programs\Coalesce`, `%PROGRAMFILES%\Coalesce` |
+| Node | `Contents/MacOS/Coalesce` | `Coalesce.exe` |
+| CLI | `Contents/Resources/coa/coa.js` | `resources\coa\coa.js` |
+
+The app is Electron, and Electron started with `ELECTRON_RUN_AS_NODE=1` is a
+plain Node — which is the trick that runs `coa.js` without a Node on `PATH`.
+That matters: `coa.js` has a `#!/usr/bin/env node` shebang and the app ships no
+`node` of its own, so the app's own binary is the only interpreter guaranteed to
+be there. The extension therefore spawns two words rather than one, which is why
+`coa` is resolved to a launcher (command + leading arguments + environment)
+instead of a path.
+
 ## Install
 
 No build step — it is plain JavaScript with no dependencies. Link the folder
@@ -167,7 +205,8 @@ Extension Development Host.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `coalesceServe.coaPath` | `""` | Path to `coa`. Empty auto-detects the Coalesce Desktop shim (`~/.coalesce/desktop/coa`, or `coa.cmd`/`.exe`/`.bat` on Windows), else `coa` from `PATH`. |
+| `coalesceServe.coaSource` | `"auto"` | Which `coa` to run: `auto`, `desktop` (the copy inside Coalesce Desktop), or `path`. See [above](#which-coa-gets-run). |
+| `coalesceServe.coaPath` | `""` | Path to `coa`. Overrides `coaSource`. Empty lets that setting choose. |
 | `coalesceServe.port` | `8082` | Preferred port. If taken, the next free port up to +49 is used. |
 | `coalesceServe.workspaceFolder` | `""` | Folder to serve. Empty picks the folder containing `workspace.yml`, else `data.yml`, else the first folder. |
 | `coalesceServe.showStatusBarItem` | `true` | Show a status bar item while the server runs. |
@@ -208,8 +247,10 @@ assertions ask the host for its own answer.
   `coa-ui-0.0.0-ci.zip`, gets an HTTP 404 and exits — so `coa serve` breaks
   once Desktop has been started. The app ships the matching UI next to its CLI
   entry point, so the extension sets `COALESCE_UI_PATH` to that directory
-  whenever it resolves to the shim. If the app has no usable copy, the
-  notification suggests quitting Coalesce Desktop and the log has the detail.
+  whenever it resolves to Desktop's CLI — by the shim or by the app. That
+  override is also what makes `coaSource: "desktop"` work at all. If the app has
+  no usable copy, the notification suggests quitting Coalesce Desktop and the
+  log has the detail.
 - The extension builds its own webview rather than calling the built-in
   `simpleBrowser.show`: it needs the panel's `onDidDispose` event to know when
   to kill the server.

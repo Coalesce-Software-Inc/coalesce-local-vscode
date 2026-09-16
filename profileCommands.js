@@ -3,7 +3,7 @@ const os = require('os');
 const coaconfig = require('./coaconfig');
 const workspaceyml = require('./workspaceyml');
 const warehouse = require('./warehouseAuth');
-const { detectCoa, killTree } = require('./serve');
+const { resolveCoa, killTree } = require('./serve');
 const { CLOUD_FIELDS, SECRET_KEYS, fieldsFor } = require('./platforms');
 const { showProfileForm } = require('./profileForm');
 
@@ -75,10 +75,20 @@ function terminalCommand(parts) {
 
 /** `coa init` is interactive, so hand it to a terminal rather than spawning it headless. */
 function runInit(dir) {
-  const coa = detectCoa(vscode.workspace.getConfiguration('coalesceServe').get('coaPath'));
-  const terminal = vscode.window.createTerminal({ name: 'coa init', cwd: dir || undefined });
+  const coa = coaFor();
+  if (coa.missing) {
+    vscode.window.showErrorMessage(coa.missing);
+    return;
+  }
+  const terminal = vscode.window.createTerminal({
+    name: 'coa init',
+    cwd: dir || undefined,
+    // Desktop's CLI is a script for its own Electron binary to run as Node; the
+    // terminal needs that said out loud, since there is no shim doing it here.
+    env: Object.keys(coa.env).length ? coa.env : undefined,
+  });
   terminal.show();
-  terminal.sendText(terminalCommand([coa, 'init']));
+  terminal.sendText(terminalCommand([coa.command, ...coa.args, 'init']));
 }
 
 /**
@@ -261,8 +271,15 @@ function openProfileForm(context, node, deps) {
 
 // ------------------------------------------------------------ warehouse sign-in
 
+/**
+ * How to run `coa`, per the user's settings. Every `coa` this extension spawns
+ * goes through here, so the Desktop / PATH choice is made in exactly one place.
+ *
+ * @returns {import('./serve').Launcher}
+ */
 function coaFor() {
-  return detectCoa(vscode.workspace.getConfiguration('coalesceServe').get('coaPath'));
+  const config = vscode.workspace.getConfiguration('coalesceServe');
+  return resolveCoa({ coaPath: config.get('coaPath'), source: config.get('coaSource') });
 }
 
 /**
@@ -385,6 +402,7 @@ function revealWorkspaceFile(deps) {
 }
 
 module.exports = {
+  coaFor,
   activateProfile,
   openProfileForm,
   editCloudField,
