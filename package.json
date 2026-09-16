@@ -199,10 +199,21 @@
     "configuration": {
       "title": "Coalesce Local UI",
       "properties": {
+        "coalesceServe.coaSource": {
+          "type": "string",
+          "enum": ["auto", "desktop", "path"],
+          "default": "auto",
+          "enumDescriptions": [
+            "Use the shim Coalesce Desktop publishes while it is running, else coa from PATH, else the CLI inside an installed Coalesce Desktop.",
+            "Always use the CLI that ships inside Coalesce Desktop, whether or not the app is running. No separate CLI install needed.",
+            "Always use coa from PATH."
+          ],
+          "markdownDescription": "Which `coa` to run. `desktop` uses the copy inside the Coalesce Desktop app (macOS and Windows), which is the way to work without installing the CLI separately. Ignored when `#coalesceServe.coaPath#` is set."
+        },
         "coalesceServe.coaPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the `coa` executable. Leave empty to auto-detect: the Coalesce Desktop shim (`~/.coalesce/desktop/coa`, or `coa.cmd`/`coa.exe`/`coa.bat` on Windows) is preferred, otherwise `coa` from `PATH`."
+          "markdownDescription": "Path to the `coa` executable. Overrides `#coalesceServe.coaSource#`. Leave empty to let that setting choose."
         },
         "coalesceServe.port": {
           "type": "number",

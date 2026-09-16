@@ -1,7 +1,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const { detectCoa, findFreePort, startServe, killTree } = require('./serve');
+const { describeCoa, findFreePort, startServe, killTree } = require('./serve');
 const { samePath } = require('./fsutil');
 const { CoalesceTreeProvider } = require('./profilesTree');
 const coaconfig = require('./coaconfig');
@@ -135,7 +135,11 @@ async function open(context) {
     return;
   }
 
-  const coa = detectCoa(config().get('coaPath'));
+  const coa = profiles.coaFor();
+  if (coa.missing) {
+    vscode.window.showErrorMessage(coa.missing);
+    return;
+  }
   const preferred = config().get('port') || 8082;
 
   let active = null;
@@ -191,13 +195,14 @@ async function open(context) {
     });
   } catch (err) {
     if (cancelled) return;
-    const hint = err.code === 'ENOENT' ? ` Could not run "${coa}" — set \`coalesceServe.coaPath\`.` : '';
+    const hint =
+      err.code === 'ENOENT' ? ` Could not run "${describeCoa(coa)}" — set \`coalesceServe.coaPath\`.` : '';
     const message = `Local Coalesce UI failed to start: ${err.message.replace(/\.$/, '')}.${hint}`;
     // Only offer the settings shortcut when the message actually asks for it.
     const actions = message.includes('coalesceServe.coaPath') ? ['Open settings', 'Show log'] : ['Show log'];
     const choice = await vscode.window.showErrorMessage(message, ...actions);
     if (choice === 'Open settings') {
-      vscode.commands.executeCommand('workbench.action.openSettings', 'coalesceServe.coaPath');
+      vscode.commands.executeCommand('workbench.action.openSettings', 'coalesceServe.coa');
     } else if (choice === 'Show log') {
       log.show(true);
     }

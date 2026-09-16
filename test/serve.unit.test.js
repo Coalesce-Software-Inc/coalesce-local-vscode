@@ -84,8 +84,6 @@ assert.strictEqual(serve.desktopUiPath(shim), null, 'no override when the app ha
 
 installDesktop({ withUi: true });
 assert.strictEqual(serve.desktopUiPath(shim), path.join(app, 'web-ui'), 'finds the UI beside the app CLI entry');
-assert.strictEqual(serve.detectCoa(), shim, 'the shim still wins auto-detection');
-assert.strictEqual(serve.detectCoa('/usr/local/bin/coa'), '/usr/local/bin/coa', 'an explicit path still wins');
 
 assert.strictEqual(serve.serveEnv(shim, {})[serve.UI_PATH_ENV], path.join(app, 'web-ui'), 'shim gets the override');
 assert.strictEqual(serve.serveEnv('coa', {})[serve.UI_PATH_ENV], undefined, 'PATH `coa` is left alone');
@@ -94,6 +92,96 @@ assert.strictEqual(
   '/my/ui',
   'an existing override is respected',
 );
+
+// ------------------------------------------------- where Coalesce Desktop lives
+// Both branches are asserted on every host: `platform` is a parameter precisely
+// so a Mac catches a regression in the Windows layout.
+
+const winPaths = serve
+  .desktopAppCandidates({ platform: 'win32', env: { LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' } })
+  .map((c) => c.exe);
+assert.deepStrictEqual(
+  winPaths,
+  ['C:\\Users\\me\\AppData\\Local\\Programs\\Coalesce\\Coalesce.exe'],
+  'the per-user NSIS install is where electron-builder puts it by default',
+);
+assert.deepStrictEqual(
+  serve.desktopAppCandidates({ platform: 'win32', env: { ProgramFiles: 'C:\\Program Files' } })[0],
+  { exe: 'C:\\Program Files\\Coalesce\\Coalesce.exe', resources: 'C:\\Program Files\\Coalesce\\resources' },
+  'an install-for-everyone is found too',
+);
+assert.deepStrictEqual(
+  serve.desktopAppCandidates({ platform: 'darwin', home: '/Users/me' }).map((c) => c.exe),
+  ['/Applications/Coalesce.app/Contents/MacOS/Coalesce', '/Users/me/Applications/Coalesce.app/Contents/MacOS/Coalesce'],
+  'macOS looks in both Applications folders',
+);
+assert.deepStrictEqual(serve.desktopAppCandidates({ platform: 'linux' }), [], 'Desktop does not ship for Linux');
+
+// --------------------------------------------------- the app's own copy of coa
+// The shim only exists while Desktop runs, so this is the path that makes the
+// app usable by someone who never installed the CLI.
+
+// `roots` keeps this off whatever is really installed on the test machine.
+const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'coaapp-'));
+const bundle = path.join(appRoot, 'Coalesce.app', 'Contents');
+const asMac = { platform: 'darwin', roots: [appRoot] };
+
+assert.strictEqual(serve.desktopAppLauncher(asMac), null, 'no app, no launcher');
+
+fs.mkdirSync(path.join(bundle, 'MacOS'), { recursive: true });
+fs.mkdirSync(path.join(bundle, 'Resources', 'coa', 'web-ui'), { recursive: true });
+fs.writeFileSync(path.join(bundle, 'MacOS', 'Coalesce'), '', { mode: 0o755 });
+assert.strictEqual(serve.desktopAppLauncher(asMac), null, 'an app with no bundled coa.js is not a launcher');
+
+fs.writeFileSync(path.join(bundle, 'Resources', 'coa', 'coa.js'), '#!/usr/bin/env node\n');
+const appCoa = serve.desktopAppLauncher(asMac);
+assert.deepStrictEqual(
+  { command: appCoa.command, args: appCoa.args, env: appCoa.env, desktop: appCoa.desktop },
+  {
+    command: path.join(bundle, 'MacOS', 'Coalesce'),
+    args: [path.join(bundle, 'Resources', 'coa', 'coa.js')],
+    // Electron is only a Node if you tell it to be, and the app ships no other.
+    env: { ELECTRON_RUN_AS_NODE: '1' },
+    desktop: true,
+  },
+  "runs the app's CLI the way the app's own shim does",
+);
+assert.strictEqual(appCoa.uiPath, null, 'an app with no index.html has no UI to point at');
+
+fs.writeFileSync(path.join(bundle, 'Resources', 'coa', 'web-ui', 'index.html'), '<!DOCTYPE html>');
+const withUi = serve.desktopAppLauncher(asMac);
+assert.strictEqual(withUi.uiPath, path.join(bundle, 'Resources', 'coa', 'web-ui'), 'serves the UI the app carries');
+assert.strictEqual(
+  serve.serveEnv(withUi, {})[serve.UI_PATH_ENV],
+  path.join(bundle, 'Resources', 'coa', 'web-ui'),
+  'and that is what coa serve is told to serve',
+);
+assert.strictEqual(serve.serveEnv(withUi, {}).ELECTRON_RUN_AS_NODE, '1', 'serve keeps the env the launcher needs');
+assert.strictEqual(
+  serve.describeCoa(withUi),
+  `${path.join(bundle, 'MacOS', 'Coalesce')} ${path.join(bundle, 'Resources', 'coa', 'coa.js')}`,
+  'logs and errors name the whole command, not just the binary',
+);
+
+// ------------------------------------------------------------------ resolveCoa
+
+assert.strictEqual(serve.resolveCoa({ coaPath: '/usr/local/bin/coa' }).command, '/usr/local/bin/coa', 'a path wins');
+assert.strictEqual(
+  serve.resolveCoa({ coaPath: '/usr/local/bin/coa', source: 'desktop' }).command,
+  '/usr/local/bin/coa',
+  'an explicit path overrides the source setting rather than fighting it',
+);
+assert.strictEqual(serve.resolveCoa({ source: 'path' }).command, 'coa', '`path` never reaches for Desktop');
+assert.strictEqual(serve.resolveCoa({ source: 'path' }).desktop, false, 'and is not treated as Desktop');
+
+// The shim installed above is still in the scratch home, so it wins auto-detection.
+assert.strictEqual(serve.resolveCoa({}).command, shim, 'a running Desktop is preferred: its build matches the app');
+assert.strictEqual(serve.resolveCoa({ source: 'desktop' }).command, shim, 'and `desktop` takes it too');
+
+fs.rmSync(path.join(desktop, path.basename(shim)));
+const noDesktop = serve.resolveCoa({ source: 'desktop' }, { platform: 'linux' });
+assert.ok(noDesktop.missing, 'asking for Desktop where there is none says so');
+assert.ok(noDesktop.missing.includes('coalesceServe.coaSource'), 'and names the setting to change');
 
 // ------------------------------------------------------------------- windows
 // These run on every host: the helpers are pure, and the Windows-only spawn
