@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- The source repository has moved to
+  [Coalesce-Software-Inc/coalesce-local-vscode](https://github.com/Coalesce-Software-Inc/coalesce-local-vscode).
+
 ## 0.3.0
 
 - Snowflake OAuth: a **Sign in / Sign out** button in the profile form, and

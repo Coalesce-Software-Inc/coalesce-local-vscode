@@ -2,16 +2,16 @@
   "name": "coalesce-local-ui",
   "displayName": "Coalesce Local UI",
   "description": "Run Coalesce directly on your local repo: the Coalesce UI in a VS Code tab, working on the files on disk. Perfect when working with AI agents.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "MIT",
   "publisher": "coalesce",
   "repository": {
     "type": "git",
-    "url": "https://github.com/markvdh/coalesce-local-vscode.git"
+    "url": "https://github.com/Coalesce-Software-Inc/coalesce-local-vscode.git"
   },
-  "homepage": "https://github.com/markvdh/coalesce-local-vscode#readme",
+  "homepage": "https://github.com/Coalesce-Software-Inc/coalesce-local-vscode#readme",
   "bugs": {
-    "url": "https://github.com/markvdh/coalesce-local-vscode/issues"
+    "url": "https://github.com/Coalesce-Software-Inc/coalesce-local-vscode/issues"
   },
   "engines": {
     "vscode": "^1.75.0"
