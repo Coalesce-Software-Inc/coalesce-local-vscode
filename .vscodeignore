@@ -4,3 +4,4 @@
 *.vsix
 test/**
 package-lock.json
+.github/**

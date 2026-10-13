@@ -1,0 +1,61 @@
+# Publish to the VS Code Marketplace and Open VSX when a version tag is pushed.
+#
+#   npm version patch        # bumps package.json and tags vX.Y.Z
+#   git push --follow-tags
+#
+# Needs repository secrets VSCE_PAT (Azure DevOps token, Marketplace: Manage)
+# and OVSX_PAT (open-vsx.org access token). Re-running a failed release is
+# safe: a version already on a registry is skipped.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # attach the .vsix to a GitHub release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Tag matches package.json
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - run: npm test
+
+      - name: Package
+        id: package
+        run: |
+          vsix="$(node -p 'const p = require("./package.json"); `${p.name}-${p.version}.vsix`')"
+          npx --yes @vscode/vsce@3 package --out "$vsix"
+          echo "vsix=$vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to VS Code Marketplace
+        run: npx --yes @vscode/vsce@3 publish --skip-duplicate --packagePath "${{ steps.package.outputs.vsix }}"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX
+        run: npx --yes ovsx@1 publish --skip-duplicate "${{ steps.package.outputs.vsix }}"
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+      - name: GitHub release
+        run: |
+          vsix="${{ steps.package.outputs.vsix }}"
+          gh release upload "$GITHUB_REF_NAME" "$vsix" --clobber 2>/dev/null \
+            || gh release create "$GITHUB_REF_NAME" "$vsix" --title "$GITHUB_REF_NAME" --notes "See [CHANGELOG.md](CHANGELOG.md)."
+        env:
+          GH_TOKEN: ${{ github.token }}

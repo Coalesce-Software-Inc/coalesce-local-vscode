@@ -260,6 +260,37 @@ and delete are inline buttons, so none of them are palette entries.
 - If the server exits on its own, the tab is closed and the error is surfaced
   with a link to the log.
 
+## Security
+
+What the extension does on your machine, for anyone reviewing it before
+install. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+- **Processes.** It runs one executable: `coa`, either the copy inside
+  Coalesce Desktop or the one on `PATH` (`coalesceServe.coaSource`), or the
+  path in `coalesceServe.coaPath`. It runs `coa serve`, `coa auth warehouse
+  login|logout`, and `coa init` (in a visible terminal). It never spawns a
+  shell, except `cmd.exe` on Windows to launch `coa.cmd`, with its own quoting.
+  On Windows it also runs `taskkill` to stop the server.
+- **Network.** The extension opens no connections itself and has no runtime
+  dependencies. It briefly binds candidate ports on `127.0.0.1` and `::1` to
+  find a free one, then closes them. `coa serve` listens on that port. The tab
+  loads its `http://localhost:<port>` URL, which carries a per-run auth nonce.
+  Traffic to Coalesce and to your warehouse comes from `coa`, not the extension.
+- **Files written.** `~/.coa/config`, mode `0600`, written atomically, with the
+  last ten versions kept beside it as `0600` backups. Unrecognised lines are
+  carried through untouched. Also `workspace.yml` in the repo, for the selected
+  profile.
+- **Credentials.** Tokens, passwords and keys live only in `~/.coa/config`, as
+  `coa` expects. Stored secrets are never sent to the profile form's webview:
+  it only learns that one is present, and a blank field keeps the stored value.
+  The form runs under a strict Content-Security-Policy (no remote content,
+  nonce-only scripts).
+- **Snowflake OAuth.** Sign-in and sign-out are delegated to `coa auth
+  warehouse`, which opens the browser and caches the tokens in
+  `snowflake-oauth-tokens.json` beside the config. The extension only reads that
+  file to show whether you are signed in.
+- **Telemetry.** None.
+
 ## Windows
 
 - `coa` installs as `coa.cmd`. Node's shell-less spawn reaches `CreateProcess`,
@@ -319,6 +350,21 @@ The suite runs on macOS, Linux and Windows. The Windows-only helpers (`PATHEXT`
 resolution, cmd.exe quoting) are pure functions and are asserted on every host,
 so a Mac catches a regression in them; the mode and case-sensitivity
 assertions ask the host for its own answer.
+
+### Releasing
+
+Add the release to `CHANGELOG.md`, then tag it:
+
+```sh
+npm version patch        # or minor; bumps package.json and tags vX.Y.Z
+git push --follow-tags
+```
+
+The tag triggers `.github/workflows/release.yml`, which runs the tests,
+packages the `.vsix`, publishes it to the VS Code Marketplace and Open VSX, and
+attaches it to a GitHub release. Both registries have to get every release:
+Cortex Code Desktop and other VS Code forks install from Open VSX. The
+workflow needs repository secrets `VSCE_PAT` and `OVSX_PAT`.
 
 ## Icons
 
