@@ -1,16 +1,47 @@
-# Coalesce Local UI (VS Code)
+# Coalesce Local UI
 
-A tiny, dependency-free VS Code extension that adds a **Coalesce** icon to the
-primary side bar with one button. Pressing it:
+Run Coalesce directly on your local repo. This extension opens the Coalesce UI
+in a VS Code tab, working on the pipeline files in your checkout instead of a
+cloud workspace — perfect when working with AI agents.
 
-1. starts `coa serve --no-open` in the background for the current workspace
-   (reusing the tab if it is already running);
-2. opens the served UI in a **VS Code editor tab** instead of an external
-   browser;
-3. **stops the server** again when you close that tab.
+## Why
 
-It also manages the profiles in `~/.coa/config`: list them, pick the one this
-repo uses, edit them in a form, and set the Coalesce API key.
+When an AI agent (Claude Code, Copilot, Cursor, …) edits your Coalesce nodes,
+it changes files on disk. With the Coalesce UI running against that same
+checkout, you see each change in the graph as it lands, and can review, tweak
+and run it, without pushing anything first. You, the agent and Git all work on
+one copy of the pipeline.
+
+## Features
+
+- **One click to start.** The Coalesce icon in the side bar starts
+  `coa serve` for the current folder and opens the UI in an editor tab.
+  Closing the tab stops the server.
+- **Warehouse profiles.** List, create, edit and delete the connection
+  profiles in `~/.coa/config` (Snowflake, Databricks, BigQuery) in a form, and
+  pick which one this repo uses.
+- **Snowflake OAuth sign-in** from the profile form.
+- **Coalesce Cloud settings.** Set the Coalesce domain, API key and
+  environment ID without editing the config file by hand.
+- **Works with Coalesce Desktop.** No separate CLI install needed if you have
+  the Coalesce Desktop app.
+- **Remote-friendly.** Works over Remote SSH and Codespaces.
+
+## Requirements
+
+- The Coalesce CLI (`coa`) on your `PATH`, **or** Coalesce Desktop installed
+  (macOS and Windows).
+- A Coalesce repo initialised for local work, i.e. with a `workspace.yml`. If
+  it has none, the side bar offers to run `coa init` for you.
+
+## Getting started
+
+1. Open your Coalesce repo in VS Code.
+2. Click the **Coalesce** icon in the activity bar.
+3. Pick or create a profile under **Profiles**.
+4. Press **▶ Open Coalesce UI**.
+
+The rest of this page describes the details.
 
 ## The workspace must be initialised
 
@@ -178,29 +209,6 @@ be there. The extension therefore spawns two words rather than one, which is why
 `coa` is resolved to a launcher (command + leading arguments + environment)
 instead of a path.
 
-## Install
-
-No build step — it is plain JavaScript with no dependencies. Link the folder
-into the extensions directory:
-
-```sh
-# macOS / Linux
-ln -s ~/GitHub/coalesce-local-vscode ~/.vscode/extensions/coalesce-local-vscode
-```
-
-```powershell
-# Windows — needs Developer Mode on, or an elevated prompt
-New-Item -ItemType SymbolicLink `
-  -Path   "$env:USERPROFILE\.vscode\extensions\coalesce-local-vscode" `
-  -Target "$env:USERPROFILE\GitHub\coalesce-local-vscode"
-```
-
-Then reload the window (`Developer: Reload Window`). For VS Code Insiders use
-`.vscode-insiders/extensions/`.
-
-To hack on it instead, open this folder in VS Code and press `F5` for an
-Extension Development Host.
-
 ## Settings
 
 | Setting | Default | Meaning |
@@ -225,18 +233,6 @@ Extension Development Host.
 
 Select / edit / delete act on a sidebar row: selecting is the row click, edit
 and delete are inline buttons, so none of them are palette entries.
-
-## Tests
-
-```sh
-npm test        # ~/.coa/config and workspace.yml models, coa resolution, failure messages
-npm run test:e2e   # spawns a real `coa serve`, asserts the handshake and the kill
-```
-
-The suite runs on macOS, Linux and Windows. The Windows-only helpers (`PATHEXT`
-resolution, cmd.exe quoting) are pure functions and are asserted on every host,
-so a Mac catches a regression in them; the mode and case-sensitivity
-assertions ask the host for its own answer.
 
 ## Notes and limits
 
@@ -287,6 +283,42 @@ assertions ask the host for its own answer.
   more.
 - `coa init` is handed to a terminal quoted for PowerShell, cmd.exe or a POSIX
   shell, whichever `vscode.env.shell` reports.
+
+## Development
+
+No build step — it is plain JavaScript with no dependencies. To run a checkout
+instead of the Marketplace build, link the folder into the extensions
+directory:
+
+```sh
+# macOS / Linux
+ln -s ~/GitHub/coalesce-local-vscode ~/.vscode/extensions/coalesce-local-vscode
+```
+
+```powershell
+# Windows — needs Developer Mode on, or an elevated prompt
+New-Item -ItemType SymbolicLink `
+  -Path   "$env:USERPROFILE\.vscode\extensions\coalesce-local-vscode" `
+  -Target "$env:USERPROFILE\GitHub\coalesce-local-vscode"
+```
+
+Then reload the window (`Developer: Reload Window`). For VS Code Insiders use
+`.vscode-insiders/extensions/`.
+
+To hack on it instead, open this folder in VS Code and press `F5` for an
+Extension Development Host.
+
+### Tests
+
+```sh
+npm test        # ~/.coa/config and workspace.yml models, coa resolution, failure messages
+npm run test:e2e   # spawns a real `coa serve`, asserts the handshake and the kill
+```
+
+The suite runs on macOS, Linux and Windows. The Windows-only helpers (`PATHEXT`
+resolution, cmd.exe quoting) are pure functions and are asserted on every host,
+so a Mac catches a regression in them; the mode and case-sensitivity
+assertions ask the host for its own answer.
 
 ## Icons
 
