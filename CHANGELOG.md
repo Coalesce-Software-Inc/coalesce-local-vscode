@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Editor tab icons now use the official Coalesce logo: navy in light themes,
+  white in dark themes.
+
 ## 0.3.1
 
 - The source repository has moved to
