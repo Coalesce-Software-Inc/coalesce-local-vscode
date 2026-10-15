@@ -368,19 +368,19 @@ workflow needs repository secrets `VSCE_PAT` and `OVSX_PAT`.
 
 ## Icons
 
-The Coalesce mark in `media/` is borrowed from
+The activity-bar and gallery icons in `media/` are borrowed from
 [`coalesce-vscode-extension`](https://github.com/jessemarshall/coalesce-vscode-extension)
-(MIT, Jesse Marshall):
+(MIT, Jesse Marshall); the tab icons are Coalesce's own logo files:
 
 | File | Source | Used for |
 | --- | --- | --- |
 | `icon.svg` | `media/icons/coalesce.svg` | activity bar (`fill="currentColor"`, VS Code masks it) |
-| `logo-light-theme.svg` | `media/icons/coalesce-icon-dark.svg` | editor tab icon, light themes (`#1B1B1F` ink) |
-| `logo-dark-theme.svg` | `media/icons/coalesce-icon-light.svg` | editor tab icon, dark themes (white ink) |
+| `logo-light-theme.svg` | `coalesce-icon.svg` | editor tab icon, light themes (`#00274B` navy) |
+| `logo-dark-theme.svg` | `coalesce-icon-white.svg` | editor tab icon, dark themes (white) |
 | `icon.png` | `media/icon.png` | extension gallery icon (256×256) |
 
-Note the swap in the two tab icons: upstream names them after the ink colour,
-VS Code's `iconPath` names them after the theme they are shown in.
+Note the swap in the two tab icons: the source files are named after the ink
+colour, VS Code's `iconPath` names them after the theme they are shown in.
 
 ## License
 
