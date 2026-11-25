@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Dark mode: the local Coalesce UI now follows the VS Code colour theme, and
+  switches along with it. The new `coalesceServe.theme` setting can instead
+  match the operating system (like Coalesce Desktop's View › Theme menu), fix
+  light or dark, or leave the theme to your Coalesce user settings.
+
 ## 0.3.2
 
 - Editor tab icons now use the official Coalesce logo: navy in light themes,
