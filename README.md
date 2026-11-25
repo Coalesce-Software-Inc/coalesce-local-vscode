@@ -21,6 +21,8 @@ one copy of the pipeline.
   profiles in `~/.coa/config` (Snowflake, Databricks, BigQuery) in a form, and
   pick which one this repo uses.
 - **Snowflake OAuth sign-in** from the profile form.
+- **Dark mode that follows VS Code** or the system, or a fixed light or dark
+  scheme, set the way Coalesce Desktop sets it.
 - **Coalesce Cloud settings.** Set the Coalesce domain, API key and
   environment ID without editing the config file by hand.
 - **Works with Coalesce Desktop.** No separate CLI install needed if you have
@@ -171,6 +173,35 @@ COA_SERVE_READY {"url":"http://localhost:8082#nonce=…","port":8082,"nonce":"�
 The extension reads that line — the URL carries the auth nonce in its fragment —
 and loads the URL into a webview itself.
 
+## Theme
+
+`coalesceServe.theme` picks the UI's colour scheme: `vscode` (the default)
+follows the VS Code colour theme, dark and high-contrast themes getting
+Coalesce's dark mode; `system` follows the operating system; `light` and `dark`
+fix it; `coalesce` leaves it to the theme in your Coalesce user settings. The
+UI switches in place, without reloading.
+
+This is how Coalesce Desktop does it. Desktop tells the UI it is the host
+(`window.coalesceDesktop`), so the UI stops using the saved user setting and
+follows the `prefers-color-scheme` media query, which Desktop sets from its
+View › Theme menu. The UI runs in a frame on its own `localhost` origin, which
+the webview cannot reach. So unless the setting is `coalesce`, the extension
+puts a small proxy in front of `coa serve`: the proxy takes the port, `coa
+serve` runs on the next free one behind it, and every page load gets a script
+that sets the same flag and answers the media query with the scheme the
+extension picks. The proxy keeps the port you configured because
+`localStorage` is per origin, port included; a different port would lose
+everything the UI remembers.
+
+Because the UI then believes it is in Desktop, its own Settings › Preferences ›
+Appearance shows "The desktop app sets the theme" instead of the theme picker,
+and its usage analytics count the session as Desktop. `system` follows what
+VS Code's window reports, which is the operating system unless
+`window.systemColorTheme` says otherwise. This needs a `coa` whose UI has the
+Desktop theme support (the one in Coalesce Desktop does); an older UI ignores
+the script. Switching to or from `coalesce` needs a restart of the local UI,
+which the extension offers.
+
 ## Which `coa` gets run
 
 Coalesce Desktop carries its own `coa`, so the extension can work for someone
@@ -217,6 +248,7 @@ instead of a path.
 | `coalesceServe.coaPath` | `""` | Path to `coa`. Overrides `coaSource`. Empty lets that setting choose. |
 | `coalesceServe.port` | `8082` | Preferred port. If taken, the next free port up to +49 is used. |
 | `coalesceServe.workspaceFolder` | `""` | Folder to serve. Empty picks the folder containing `workspace.yml`, else `data.yml`, else the first folder. |
+| `coalesceServe.theme` | `"vscode"` | UI colour scheme: `vscode` (follow VS Code), `system`, `light`, `dark`, or `coalesce` (leave it to the UI). See [Theme](#theme). |
 | `coalesceServe.showStatusBarItem` | `true` | Show a status bar item while the server runs. |
 
 ## Commands
@@ -271,11 +303,15 @@ install. To report a vulnerability, see [SECURITY.md](SECURITY.md).
   login|logout`, and `coa init` (in a visible terminal). It never spawns a
   shell, except `cmd.exe` on Windows to launch `coa.cmd`, with its own quoting.
   On Windows it also runs `taskkill` to stop the server.
-- **Network.** The extension opens no connections itself and has no runtime
-  dependencies. It briefly binds candidate ports on `127.0.0.1` and `::1` to
-  find a free one, then closes them. `coa serve` listens on that port. The tab
-  loads its `http://localhost:<port>` URL, which carries a per-run auth nonce.
-  Traffic to Coalesce and to your warehouse comes from `coa`, not the extension.
+- **Network.** The extension has no runtime dependencies. It briefly binds
+  candidate ports on `127.0.0.1` and `::1` to find a free one, then closes
+  them. `coa serve` listens on that port, or, unless `coalesceServe.theme` is
+  `coalesce`, the extension's [theme proxy](#theme) does, on `127.0.0.1` only,
+  and forwards everything to `coa serve` on the next free port. The proxy only
+  connects to `coa serve`, and changes nothing but page loads, which get one
+  inline script. The tab loads the `http://localhost:<port>` URL, which carries
+  a per-run auth nonce. Traffic to Coalesce and to your warehouse comes from
+  `coa`, not the extension.
 - **Files written.** `~/.coa/config`, mode `0600`, written atomically, with the
   last ten versions kept beside it as `0600` backups. Unrecognised lines are
   carried through untouched. Also `workspace.yml` in the repo, for the selected
@@ -342,7 +378,7 @@ Extension Development Host.
 ### Tests
 
 ```sh
-npm test        # ~/.coa/config and workspace.yml models, coa resolution, failure messages
+npm test        # ~/.coa/config and workspace.yml models, coa resolution, failure messages, theme proxy
 npm run test:e2e   # spawns a real `coa serve`, asserts the handshake and the kill
 ```
 

@@ -2,13 +2,18 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const { describeCoa, findFreePort, startServe, killTree } = require('./serve');
+const { MESSAGE_TYPE, startThemeProxy } = require('./themeProxy');
 const { samePath } = require('./fsutil');
 const { CoalesceTreeProvider } = require('./profilesTree');
 const coaconfig = require('./coaconfig');
 const workspaceyml = require('./workspaceyml');
 const profiles = require('./profileCommands');
 
-/** @type {{ proc: import('child_process').ChildProcess, panel: vscode.WebviewPanel, url: string, port: number } | null} */
+/**
+ * `proxy` is set when the extension picks the UI's colour scheme; `port` and
+ * `url` are then the proxy's, which is what the tab loads.
+ * @type {{ proc: import('child_process').ChildProcess, panel: vscode.WebviewPanel, url: string, port: number, proxy: { close: () => void } | null } | null}
+ */
 let session = null;
 /** @type {vscode.OutputChannel} */
 let log;
@@ -41,6 +46,40 @@ function resolveFolder() {
   return (initialised || withDataYml || folders[0]).uri.fsPath;
 }
 
+// ---------------------------------------------------------------------- theme
+
+/**
+ * The scheme to give the UI, the same three Coalesce Desktop's View › Theme
+ * menu offers, or null to leave it to Coalesce. `vscode` picks light or dark
+ * from the colour theme; `system` follows the operating system.
+ * @returns {'light' | 'dark' | 'system' | null}
+ */
+function uiTheme() {
+  const choice = config().get('theme');
+  if (choice === 'coalesce') return null;
+  if (choice === 'light' || choice === 'dark' || choice === 'system') return choice;
+  const kind = vscode.window.activeColorTheme.kind;
+  return kind === vscode.ColorThemeKind.Light || kind === vscode.ColorThemeKind.HighContrastLight ? 'light' : 'dark';
+}
+
+/** Tell the open UI the scheme; it repaints in place, as in Coalesce Desktop. */
+function pushTheme() {
+  const theme = uiTheme();
+  if (!session?.proxy || !theme) return;
+  session.panel.webview.postMessage({ type: MESSAGE_TYPE, theme });
+}
+
+function onThemeSettingChanged() {
+  pushTheme();
+  // Leaving the scheme to Coalesce means no proxy, and the other way round, so
+  // switching between the two only takes effect on a fresh server.
+  if (session && !session.proxy !== (uiTheme() === null)) {
+    vscode.window
+      .showInformationMessage('Restart the local Coalesce UI to apply the new theme setting.', 'Restart')
+      .then((choice) => choice && vscode.commands.executeCommand('coalesceServe.restart'));
+  }
+}
+
 // -------------------------------------------------------------------- webview
 
 function panelHtml(src) {
@@ -60,6 +99,13 @@ function panelHtml(src) {
   </head>
   <body>
     <iframe src="${escaped}" allow="clipboard-read; clipboard-write; downloads"></iframe>
+    <script>
+      // The framed UI is on another origin; the script the theme proxy adds to it listens for this.
+      const frame = document.querySelector('iframe');
+      window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === ${JSON.stringify(MESSAGE_TYPE)}) frame.contentWindow.postMessage(event.data, '*');
+      });
+    </script>
   </body>
 </html>`;
 }
@@ -103,12 +149,17 @@ function setRunning(running) {
   tree?.refresh();
 }
 
+function endSession() {
+  session?.proxy?.close();
+  session = null;
+  setRunning(false);
+}
+
 /** The server died on its own — tear the tab down so the two never disagree. */
 function onServerExit(proc, code, signal) {
   if (!session || session.proc !== proc) return;
   const panel = session.panel;
-  session = null;
-  setRunning(false);
+  endSession();
   panel.dispose();
   if (code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGKILL') {
     vscode.window
@@ -150,6 +201,7 @@ async function open(context) {
   }
 
   let cancelled = false;
+  let proxy = null;
   try {
     const started = await vscode.window.withProgress(
       {
@@ -162,11 +214,20 @@ async function open(context) {
         if (port !== preferred) progress.report({ message: `port ${preferred} is taken, using ${port}` });
 
         log.appendLine('');
+        // To pick the colour scheme, the proxy takes the port the user expects
+        // and `coa serve` moves to the next free one behind it.
+        let servePort = port;
+        if (uiTheme()) {
+          servePort = await findFreePort(port + 1);
+          proxy = await startThemeProxy({ port, target: servePort, getTheme: () => uiTheme() || 'system' });
+          log.appendLine(`[coalesce-serve] theme proxy on ${port} → coa serve on ${servePort}`);
+        }
+
         let child;
         const { proc, ready } = startServe({
           coa,
           dir,
-          port,
+          port: servePort,
           onOutput: (text) => log.append(text),
           onExit: (code, signal) => onServerExit(child, code, signal),
         });
@@ -180,20 +241,27 @@ async function open(context) {
       },
     );
 
-    const port = started.info.port || started.port;
-    const panel = await createPanel(context, started.info.url, port);
-    session = { proc: started.proc, panel, url: started.info.url, port };
+    let url = started.info.url;
+    let port = started.info.port || started.port;
+    if (proxy) {
+      const proxied = new URL(url);
+      proxied.port = String(proxy.port);
+      url = proxied.toString();
+      port = proxy.port;
+    }
+    const panel = await createPanel(context, url, port);
+    session = { proc: started.proc, panel, url, port, proxy };
     setRunning(true);
 
     panel.onDidDispose(() => {
       if (!session || session.panel !== panel) return;
       const { proc } = session;
-      session = null;
-      setRunning(false);
+      endSession();
       log.appendLine('\n[coalesce-serve] tab closed — stopping the server');
       killTree(proc);
     });
   } catch (err) {
+    proxy?.close();
     if (cancelled) return;
     const hint =
       err.code === 'ENOENT' ? ` Could not run "${describeCoa(coa)}" — set \`coalesceServe.coaPath\`.` : '';
@@ -275,6 +343,9 @@ function activate(context) {
     command('coalesceServe.restart', () => restart(context)),
     command('coalesceServe.showLog', () => log.show(true)),
     command('coalesceServe.initWorkspace', () => profiles.runInit(resolveFolder())),
+
+    vscode.window.onDidChangeActiveColorTheme(() => pushTheme()),
+    vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('coalesceServe.theme') && onThemeSettingChanged()),
 
     command('coalesceServe.refresh', refresh),
     command('coalesceServe.newProfile', () => profiles.openProfileForm(context, null, deps)),
